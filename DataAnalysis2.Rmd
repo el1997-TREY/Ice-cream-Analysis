@@ -1,0 +1,372 @@
+---
+title: "DataAnalysis2"
+author: "Enyu Li"
+date: "2025-04-23"
+output: pdf_document
+---
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+library(astsa)
+library(xts)  # This will automatically load zoo
+library(ggplot2)
+#library(ggfortify)
+library(tidyverse)
+library(knitr)
+library(tidyquant)
+library(fanplot)
+library(urca)
+library(forecast)
+library(fpp3)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(astsa)
+library(xts)  # This will automatically load zoo
+library(ggplot2)
+#library(ggfortify)
+library(tidyverse)
+library(knitr)
+library(tidyquant)
+library(fanplot)
+library(urca)
+library(forecast)
+library(fpp3)
+```
+
+# Data Analysis 2 is worth 10\% of final grade. 
+
+Honor Code: You may work with ONE other person on this analysis. If you do so, you should indicate both authors on the paper, but submit individually. Feel free to make use of generative AI tools, and online searches, as helpful.
+
+**DUE DATE:** April 25 at midnight. Extensions will be granted through Tuesday April 30 at midnight. 
+
+**WHAT TO SUBMIT:** Solutions should be written using RMarkdown or Quarto. You will submit
+
+- The compiled html (or pdf if you prefer)
+- The RMarkdown or Quarto file
+
+# Modeling and Forecast ICE CREAM MANUFACTURING
+
+Background: The time series used is IPN31152N.csv. This time series represents monthly ice cream production for the US since 1972 through 2024. The series is not seasonally adjusted but is indexed to 2017. 
+
+Data Citation: Board of Governors of the Federal Reserve System (US), Industrial Production: Manufacturing: Non-Durable Goods: Ice Cream and Frozen Dessert (NAICS = 31152) [IPN31152N], retrieved from FRED, Federal Reserve Bank of St. Louis; https://fred.stlouisfed.org/series/IPN31152N, April 22, 2025.
+
+Our goals for analyzing this data are
+
+    + Describing and modeling to understand the dynamics of ice cream production
+    + Forecasting monthly production through December of 2025
+
+**QUESTION 0** AFTER you answer questions 1-4, come back and ANSWER THIS QUESTION. 
+Provide a succinct summary of your findings to address the above goals. Choose as the audience for your paragraph a manager at a company producing ice cream, or an investment manager who focuses on ice cream, or something similar. For example, these managers WILL NOT CARE ABOUT order selection criteria but will expect that you did your analysis well and the insight you are providing them is something that they can move forward with profitable decisions for the company. Do include uncertainty bounds in your narrative. 
+
+Based on a comprehensive time series analysis of historical U.S. ice cream production data, we identified strong seasonal patterns with peaks typically occurring in the warmer months. Using a statistically validated ARIMA(1,0,1)(0,1,1)[12] model, we forecast monthly ice cream production through December 2025. The model projects a continuation of established seasonal trends, with production expected to rise during summer months and dip during winter, consistent with historical demand cycles. While the central forecast provides actionable insight for inventory planning and marketing timing, the 80% and 95% confidence intervals around each monthly estimate indicate increasing uncertainty further into the future. For example, forecasted summer 2025 production volumes fall within a reasonably narrow band, while year-end estimates carry wider margins. This suggests the model is reliable in the short-to-medium term, and strategic decisions such as production scaling, distribution planning, and investment timing can be made with confidence—while remaining mindful of forecast variability, especially beyond a one-year horizon.
+
+**QUESTION 1** Produce descriptive plots and {\bf DISCUSS} what information you glean from each plot. 
+
+    + Time series
+    + Relevant seasonal plot
+    + Decomposition plot
+    + ACF, PACF and periodogram
+```{r}
+df <- read.csv("IPN31152N.csv")
+
+
+head(df)
+# from head(df), we can see that this is a monthly data, now convert the df into a ts 
+data_ts <- ts(df$IPN31152N, start = c(1972,1), frequency = 12)
+
+
+#draw a time series autoplot
+Ts_plot <- autoplot(data_ts,
+                    xlab = "Time",
+                    ylab = "Industrial Production Index",
+                    main = "Time Series Plot of the Ice Cream Sales")
+Ts_plot
+```
+
+
+```{r}
+# Make relevant seasonal plot
+ggseasonplot(data_ts)
+```
+
+The seasonal plots clearly show that the sales of ice-cream sales clearly increase from winter in January to the summer in June. And this trend works for all of the years. 
+
+```{r}
+# Decompose the data 
+decom <- decompose(data_ts)
+plot(decom)
+```
+
+
+The decomposition plot looks good to me. 
+```{r}
+acf(data_ts)
+pacf(data_ts)
+pgram <- stats::spec.pgram(data_ts,
+                  spans = 5,
+                  fast = FALSE, # so we do not pad with zeros for FFT
+                  dmean = TRUE,
+                  detrend = FALSE,
+                  plot = TRUE)
+```
+
+```{r}
+# Find the frequency with the max spectral density
+max_index <- which.max(pgram$spec)
+dominant_freq <- pgram$freq[max_index]
+
+# Convert to period
+dominant_period <- 1 / dominant_freq
+dominant_period
+```
+
+
+**QUESTION 2** Construct a **seasonally adjusted** time series by standardizing each month with the mean and standard deviation for that month across all years, and compare to the seasonally adjusted series from FRED, also in the folder as IPN31152S.csv. Use whatever graphs you deem helpful for this comparison (sometimes something simple like a scatterplot with colors for years or months works well - your choice). Again be sure and DISCUSS. 
+```{r}
+df$Date <- as.Date(df$observation_date)
+
+df$Year <- year(df$Date)
+df$Month <- month(df$Date)
+head(df)
+df_seasonal_adj <- df %>%
+  group_by(Month) %>%
+  mutate(
+    IPN31152N_zscore = (IPN31152N - mean(IPN31152N, na.rm = TRUE)) / sd(IPN31152N, na.rm = TRUE)
+  ) %>% 
+  ungroup()
+```
+
+```{r}
+df2 <- read.csv("IPN31152S.csv")
+```
+
+```{r}
+library(tidyverse)
+library(lubridate)
+
+# --- Step 1: Load both datasets ---
+df1 <- read.csv("IPN31152N.csv")  # contains IPN31152N
+df2 <- read.csv("IPN31152S.csv")           # FRED adjusted
+
+# --- Step 2: Convert date columns ---
+df1$Date <- as.Date(df1$observation_date)
+df2$Date <- as.Date(df2$observation_date)
+
+# --- Step 3: Add Month & Year to both ---
+df1$Month <- month(df1$Date)
+df2$Month <- month(df2$Date)
+
+# --- Step 4: Standardize each month across all years for both series ---
+
+# Manual z-score for original series
+df1_adj <- df1 %>%
+  group_by(Month) %>%
+  mutate(IPN31152N_zscore = (IPN31152N - mean(IPN31152N, na.rm = TRUE)) / sd(IPN31152N, na.rm = TRUE)) %>%
+  ungroup()
+
+# Manual z-score for FRED adjusted series
+df2_adj <- df2 %>%
+  group_by(Month) %>%
+  mutate(IPN31152S_zscore = (IPN31152S - mean(IPN31152S, na.rm = TRUE)) / sd(IPN31152S, na.rm = TRUE)) %>%
+  ungroup()
+
+# --- Step 5: Merge both standardized series by Date ---
+df_merged <- left_join(df1_adj %>% select(Date, IPN31152N_zscore),
+                       df2_adj %>% select(Date, IPN31152S_zscore),
+                       by = "Date")
+
+# --- Step 6: Convert to long format for ggplot ---
+df_long <- df_merged %>%
+  pivot_longer(cols = c(IPN31152N_zscore, IPN31152S_zscore),
+               names_to = "Series", values_to = "Value")
+
+# --- Step 7: Plot both standardized series together ---
+ggplot(df_long, aes(x = Date, y = Value, color = Series)) +
+  geom_line() +
+  labs(
+    title = "Comparison of Standardized Series (Z-Score by Month)",
+    x = "Date",
+    y = "Standardized Value (Z-Score)"
+  ) +
+  scale_color_manual(values = c("IPN31152N_zscore" = "blue", "IPN31152S_zscore" = "red"),
+                     labels = c("Manual Adjustment", "FRED Adjustment")) +
+  theme_minimal()
+```
+
+To examine the effectiveness of seasonal adjustment methods, I manually standardized the original time series (IPN31152N) by calculating z-scores for each calendar month across all years, and compared the result to the officially seasonally adjusted series from FRED (IPN31152S). The plot shows that both series follow a nearly identical pattern over time, with peaks, troughs, and overall trends aligning closely. This indicates that the manual month-wise standardization successfully removes seasonal effects and captures the underlying structure of the data. While the manually adjusted series appears slightly more volatile due to the nature of z-score scaling, it provides a reasonable approximation of the FRED-adjusted values. This comparison demonstrates that simple standardization by month can be a useful and interpretable method for seasonal adjustment when more advanced tools are not available.
+
+
+**QUESTION 3** Develop an appropriate SARIMA model, or trend stationary SARMA model for the original unadjusted series. Justify your model choice using
+
+    + Preliminary tests (e.g. unit roots, trend stationary)
+    + Model selection criteria (eg. AIC, AICc, BIC)
+    + Diagnostics of standaridized residuals
+
+Be sure and include a discussion not just the plots. 
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(tseries)
+library(forecast)
+library(urca)
+# first do the prelimary tests of unit roots 
+adf_test <- adf.test(data_ts)  
+adf_test
+```
+As we can see, we fail to reject the null hypothesis that the time series is non-stationary. Thus, the time series is non-stationary. 
+
+```{r}
+# If non-stationary, difference the series:
+data_ts_diff <- diff(data_ts)
+#autoplot(data_ts_diff) + ggtitle("First Difference of IPN31152N")
+
+adf_test <- adf.test(data_ts_diff)  
+adf_test
+```
+As we can see, the differenced time series is stationary. 
+
+Now check if seasonal differencing is needed. 
+```{r}
+# --- Step 4: Check seasonal differencing (e.g., seasonal unit root) ---
+seas_test <- nsdiffs(data_ts)  # how many seasonal differences needed
+print(seas_test) 
+```
+Yes, a seasonal differencing is needed. 
+
+
+This is what the auto SARIMA model
+```{r}
+# --- Step 5: Automatically select a SARIMA model ---
+model <- auto.arima(data_ts, seasonal = TRUE, stepwise = FALSE, approximation = FALSE)
+summary(model)
+```
+
+By using the auto.fit, we can see the best model has AIC = 3554.47, AICc = 3554.61, and BIC = 3581.09. 
+
+Now do a diagnostics of the residuals.  
+```{r}
+checkresiduals(model)
+```
+
+The residual diagnostics from the SARIMA(4,0,0)(0,1,1)[12] model suggest that the model provides an overall adequate fit to the data. The residuals fluctuate around zero without visible trends or seasonal patterns, indicating that the model has captured the main structure of the series. The ACF plot shows most autocorrelations are within the 95% confidence bounds, suggesting that the residuals are largely uncorrelated, though small spikes at seasonal lags (e.g., lag 12 and 24) hint at minor remaining seasonal structure. The histogram of residuals approximates a normal distribution, with slight skewness and heavy tails. Altogether, the residuals resemble white noise, supporting the appropriateness of the model for forecasting purposes.
+
+Plot the auto model and the original data together
+```{r}
+# Extract fitted values
+fitted_values <- fitted(model)
+
+# Create a data frame for plotting
+plot_df <- data.frame(
+  Date = as.Date(time(data_ts)),        # convert time index to Date
+  Actual = as.numeric(data_ts),         # original time series
+  Fitted = as.numeric(fitted_values)    # model's fitted values
+)
+
+# Plot both actual and fitted
+ggplot(plot_df, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = Fitted, color = "Fitted"), linewidth = 0.8, linetype = "dashed") +
+  labs(
+    title = "Original Time Series vs Fitted Values from SARIMA Model",
+    y = "Value", x = "Date", color = "Series"
+  ) +
+  scale_color_manual(values = c("Actual" = "black", "Fitted" = "red")) +
+  theme_minimal()
+```
+
+Now select my own models. 
+
+Because that I already use the test that series need seasonal differencing 
+```{r}
+# check if a seasonal differencing is needed
+seas_test <- nsdiffs(data_ts)  # how many seasonal differences needed
+print(seas_test) 
+```
+
+```{r}
+# difference the time series by 12 or seasonal difference of 12
+data_seasondiff <- diff(data_ts,lag = 12)
+
+# now check the stationary of the seasonal differenced time series
+adf.test(data_seasondiff)
+```
+After differencing on the seasonal pattern with D = 1, the time series are stationary. Thus, choose D = 1, and d = 0. 
+
+Now plot the acf and pacf of seasoned_diff time series
+```{r}
+par(mfrow = c(1,2))
+acf(data_seasondiff)
+pacf(data_seasondiff)
+```
+Based on the ACF and PACF plots of the seasonally differenced series (data_seasondiff), we can identify appropriate orders for a SARIMA model. The ACF shows a strong spike at lag 1 followed by a gradual decay, suggesting a non-seasonal autoregressive component, likely indicating p = 1. The PACF shows a sharp cutoff after lag 1, which supports the presence of a non-seasonal moving average component, suggesting q = 1. Since seasonal differencing has already been applied, we assume D = 1 and d = 0. While the provided plots do not extend to higher seasonal lags (e.g., 12 or 24), if further ACF analysis reveals a significant spike at lag 12, we would consider a seasonal MA term, i.e., Q = 1. If PACF shows a significant spike at seasonal lag 12 instead, a seasonal AR term P = 1 might be appropriate. In the absence of visible seasonal spikes in the current plots, a reasonable starting model would be SARIMA(1, 0, 1)(0, 1, 1)[12], with further refinement guided by residual diagnostics and information criteria such as AIC or BIC.
+
+```{r}
+library(forecast)
+library(ggplot2)
+
+# --- Step 1: Fit SARIMA(1,0,1)(0,1,1)[12] ---
+model <- Arima(data_ts, order = c(1, 0, 1), seasonal = list(order = c(0, 1, 1), period = 12))
+
+# --- Step 2: Check AIC and BIC ---
+aic_value <- AIC(model)
+bic_value <- BIC(model)
+cat("AIC:", aic_value, "\n")
+cat("BIC:", bic_value, "\n")
+
+# --- Step 3: Plot residual diagnostics ---
+checkresiduals(model)
+
+# --- Step 4: Plot original data and fitted values together ---
+# Extract fitted values
+fitted_vals <- fitted(model)
+
+# Create data frame for plotting
+plot_df <- data.frame(
+  Date = as.Date(time(data_ts)),
+  Actual = as.numeric(data_ts),
+  Fitted = as.numeric(fitted_vals)
+)
+
+# Plot with ggplot2
+ggplot(plot_df, aes(x = Date)) +
+  geom_line(aes(y = Actual, color = "Actual"), linewidth = 0.8) +
+  geom_line(aes(y = Fitted, color = "Fitted"), linewidth = 0.8, linetype = "dashed") +
+  labs(
+    title = "Original Series vs Fitted Values from SARIMA(1,0,1)(0,1,1)[12]",
+    x = "Date",
+    y = "Value",
+    color = "Legend"
+  ) +
+  scale_color_manual(values = c("Actual" = "black", "Fitted" = "red")) +
+  theme_minimal()
+```
+The residual diagnostics from the ARIMA(1,0,1)(0,1,1)[12] model suggest that the model provides a reasonably good fit to the time series data. The top panel shows residuals fluctuating randomly around zero without obvious patterns, indicating that the model has effectively captured the underlying structure. The ACF plot in the lower left shows that most autocorrelation values fall within the 95% confidence bounds, with no significant lag spikes, suggesting that the residuals are approximately white noise and that no substantial autocorrelation remains. The histogram in the lower right reveals a fairly symmetric, bell-shaped distribution of residuals, closely following a normal distribution, which supports the assumption of Gaussian errors. Together, these diagnostics provide evidence that the ARIMA(1,0,1)(0,1,1)[12] model is statistically appropriate and captures both the trend and seasonal dynamics of the original series effectively.
+My model is not as good as the auto.arima model. 
+
+**QUESTION 4** Write down your chosen model.
+I choose the auto.arima model. 
+\begin{align*}
+(1 - \phi_1 L - \phi_2 L^2 - \phi_3 L^3 - \phi_4 L^4)(1 - L^{12}) Y_t 
+= (1 + \Theta_1 L^{12}) \varepsilon_t
+\end{align*}
+
+**QUESTION 5** Forecast the unadjusted ice cream production series through December of 2025. Comment on the validity of your forecast. 
+```{r}
+library(forecast)
+
+# Forecast using the chosen SARIMA model
+forecast_length <- 12 * (2025 - end(data_ts)[1]) + (12 - end(data_ts)[2])  # months until Dec 2025
+forecast_result <- forecast(model, h = forecast_length)
+
+# Plot the forecast
+autoplot(forecast_result) +
+  labs(title = "Forecast of Unadjusted Ice Cream Production through Dec 2025",
+       x = "Year", y = "Production Volume") +
+  theme_minimal()
+```
+The validity of the forecast produced using the ARIMA(1,0,1)(0,1,1)[12] model appears strong based on diagnostic checks. The model residuals exhibit characteristics of white noise—centered around zero, uncorrelated, and approximately normally distributed—suggesting that the model has effectively captured the structure of the original time series, including its seasonal component. The forecast maintains the expected seasonal behavior, projecting higher production in summer months and lower in winter, consistent with historical trends in ice cream consumption. However, like all time series models, the forecast assumes that future patterns will follow past behavior. This introduces some limitations, especially in the long term, as external factors (e.g., economic shifts, supply chain disruptions, or climate anomalies) may alter production dynamics in unforeseen ways. Additionally, the prediction intervals widen over time, reflecting increasing uncertainty. Overall, the forecast is statistically sound and appropriate for short-to-medium-term planning, but should be used alongside other market insights for long-term strategic decisions.
+
+
